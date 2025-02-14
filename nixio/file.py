@@ -19,7 +19,7 @@ from .block import Block
 from .section import Section
 from .container import Container, SectionContainer
 from . import util
-from .exceptions import InvalidFile, DuplicateName
+from .exceptions import InvalidFile, DuplicateName, Invalidh5py
 from .util import find as finders
 from . import validator
 from .compression import Compression
@@ -67,9 +67,25 @@ def map_file_mode(mode):
     else:
         raise ValueError("Invalid file mode specified.")
 
+def make_fapl(mpi4:bool):
+    """
+    File Access Property List
+    """
+    fapl = h5py.h5p.create(h5py.h5p.FILE_ACCESS)
+    if mpi4:
+        try:
+            from mpi4py import MPI
+        except ModuleNotFoundError:
+            raise ModuleNotFoundError
+        mpi_comm = MPI.COMM_WORLD
+        mpi_info = MPI.Info.Create()
+        try:
+            fapl.set_driver(h5py.h5fd.MPIO)
+            fapl.set_fapl_mpio(mpi_comm, mpi_info)
+        except ValueError:
+            raise Invalidh5py
+    return fapl
 
-def make_fapl():
-    return h5py.h5p.create(h5py.h5p.FILE_ACCESS)
 
 
 def make_fcpl():
@@ -83,7 +99,8 @@ class File:
 
     def __init__(self, path, mode=FileMode.ReadWrite,
                  compression=Compression.Auto,
-                 auto_update_timestamps=True):
+                 auto_update_timestamps=True,
+                 mpi:bool=False):
         """
         Open a NIX file, or create it if it does not exist.
 
@@ -93,6 +110,7 @@ class File:
         :param compression: No, DeflateNormal, Auto (default: Auto)
         :param auto_update_timestamps: Enable/disable automatic updating of
                     'updated_at' timestamp. (default: True)
+        :param mpi: enable Message Passing Interface (MPI) with mpi4py for multiprocessing nix files
 
         :return: nixio.File object
         """
@@ -109,14 +127,14 @@ class File:
         if not os.path.exists(path) or mode == FileMode.Overwrite:
             mode = FileMode.Overwrite
             h5mode = map_file_mode(mode)
-            fid = h5py.h5f.create(path, flags=h5mode, fapl=make_fapl(),
+            fid = h5py.h5f.create(path, flags=h5mode, fapl=make_fapl(mpi),
                                   fcpl=make_fcpl())
             self._h5file = h5py.File(fid)
             self._root = H5Group(self._h5file, "/", create=True)
             self._create_header()
         else:
             h5mode = map_file_mode(mode)
-            fid = h5py.h5f.open(path, flags=h5mode, fapl=make_fapl())
+            fid = h5py.h5f.open(path, flags=h5mode, fapl=make_fapl(mpi))
             self._h5file = h5py.File(fid)
             self._root = H5Group(self._h5file, "/")
 
@@ -139,10 +157,10 @@ class File:
 
     @classmethod
     def open(cls, path, mode=FileMode.ReadWrite, compression=Compression.Auto,
-             backend=None, auto_update_timestamps=True):
+             backend=None, auto_update_timestamps=True, mpi:bool=False):
         if backend is not None:
             warn("Backend selection is deprecated. Ignoring value.")
-        return cls(path, mode, compression, auto_update_timestamps)
+        return cls(path, mode, compression, auto_update_timestamps, mpi)
 
     def _create_header(self):
         self._set_format()
