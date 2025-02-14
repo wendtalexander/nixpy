@@ -11,20 +11,30 @@ import time
 import h5py
 import unittest
 import numpy as np
+from IPython import embed
+
+try:
+    import mpi4py
+    mpi_installed = True
+    from mpi4py import MPI
+except ModuleNotFoundError:
+    mpi_installed = False
 
 import nixio as nix
 import nixio.file as filepy
-from nixio.exceptions import InvalidFile, DuplicateName
+from nixio.exceptions import InvalidFile, DuplicateName, Invalidh5py
 
 from .tmp import TempDir
 
+MPI_ENABLED = getattr(h5py.get_config(), 'mpi', False)
+
 
 class TestFile(unittest.TestCase):
-
+    mpi=False
     def setUp(self):
         self.tmpdir = TempDir("filetest")
         self.testfilename = os.path.join(self.tmpdir.path, "filetest.nix")
-        self.file = nix.File.open(self.testfilename, nix.FileMode.Overwrite)
+        self.file = nix.File.open(self.testfilename, nix.FileMode.Overwrite, mpi=self.mpi)
 
     def tearDown(self):
         self.file.close()
@@ -33,6 +43,17 @@ class TestFile(unittest.TestCase):
     def test_file_format(self):
         assert self.file.format == "nix"
         assert self.file.version == filepy.HDF_FF_VERSION
+
+    def test_file_mpi(self):
+        testfilename= os.path.join(self.tmpdir.path, "filetest_mpi.nix")
+        if not mpi_installed:
+            with self.assertRaises(ModuleNotFoundError):
+                file = nix.File.open(testfilename, nix.FileMode.Overwrite, mpi=True)
+                file.close()
+        if not MPI_ENABLED and mpi_installed:
+            with self.assertRaises(Invalidh5py):
+                file = nix.File.open(testfilename,nix.FileMode.Overwrite, mpi=True)
+                file.close()
 
     def test_file_timestamps(self):
         created_at = self.file.created_at
@@ -236,9 +257,13 @@ class TestFileVer(unittest.TestCase):
     backend = "h5py"
     filever = filepy.HDF_FF_VERSION
     fformat = filepy.FILE_FORMAT
+    mpi=False
 
     def try_open(self, mode):
-        nix_file = nix.File.open(self.testfilename, mode)
+        # with nix.File(self.testfilename, mode, mpi=self.mpi) as file:
+        #     pass
+
+        nix_file = nix.File.open(self.testfilename, mode, mpi=self.mpi)
         nix_file.close()
 
     def set_header(self, fformat=None, version=None, fileid=None):
@@ -260,7 +285,11 @@ class TestFileVer(unittest.TestCase):
     def setUp(self):
         self.tmpdir = TempDir("vertest")
         self.testfilename = os.path.join(self.tmpdir.path, "vertest.nix")
-        self.h5file = h5py.File(self.testfilename, mode="w")
+        if not self.mpi:
+            self.h5file = h5py.File(self.testfilename, mode="w")
+        else:
+            comm=MPI.COMM_WORLD
+            self.h5file = h5py.File(self.testfilename, mode="w", driver="mpio", comm= comm)
         self.h5root = self.h5file["/"]
 
     def tearDown(self):
@@ -327,3 +356,16 @@ class TestFileVer(unittest.TestCase):
 
         self.set_header(version=(1, 0, 0), fileid="")
         self.try_open(nix.FileMode.ReadOnly)
+
+@unittest.skipUnless(mpi_installed,"mpi4py not installed")
+@unittest.skipUnless(MPI_ENABLED, "h5py is not built with MPI support")
+class TestFile_mpi(TestFile):
+    mpi = True
+
+@unittest.skipUnless(mpi_installed,"mpi4py not installed")
+@unittest.skipUnless(MPI_ENABLED, "h5py is not built with MPI support")
+class TestFileVer_mpi(TestFileVer):
+    mpi = True
+
+if __name__ == '__main__':
+    unittest.main()
