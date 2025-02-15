@@ -91,3 +91,9 @@ class UnsupportedLinkType(Exception):
     def __init__(self, objtype, linktype):
         self.message = "LinkType {} is not supported for {}".format(linktype, objtype)
         super(UnsupportedLinkType, self).__init__(self.message)
+
+class Invalidh5py(Exception):
+
+    def __init__(self):
+        self.message = "For parallel read/write access you have to compile h5py with the MPI"
+        super(Invalidh5py, self).__init__(self.message)
