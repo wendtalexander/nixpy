@@ -260,40 +260,49 @@ class TestFileVer(unittest.TestCase):
     mpi=False
 
     def try_open(self, mode):
-        # with nix.File(self.testfilename, mode, mpi=self.mpi) as file:
-        #     pass
-
         nix_file = nix.File.open(self.testfilename, mode, mpi=self.mpi)
         nix_file.close()
 
     def set_header(self, fformat=None, version=None, fileid=None):
+
+        if not self.mpi:
+            h5file = h5py.File(self.testfilename, mode="w")
+        else:
+            comm=MPI.COMM_WORLD
+            h5file = h5py.File(self.testfilename, mode="w", driver="mpio", comm=comm)
+        h5root = h5file["/"]
+
         if fformat is None:
             fformat = self.fformat
         if version is None:
             version = self.filever
         if fileid is None:
             fileid = nix.util.create_id()
-        self.h5root.attrs["format"] = fformat
-        self.h5root.attrs["version"] = version
-        self.h5root.attrs["id"] = fileid
-        self.h5root.attrs["created_at"] = 0
-        self.h5root.attrs["updated_at"] = 0
-        if "data" not in self.h5root:
-            self.h5root.create_group("data")
-            self.h5root.create_group("metadata")
+        h5root.attrs["format"] = fformat
+        h5root.attrs["version"] = version
+        h5root.attrs["id"] = fileid
+        h5root.attrs["created_at"] = 0
+        h5root.attrs["updated_at"] = 0
+        if "data" not in h5root:
+            h5root.create_group("data")
+            h5root.create_group("metadata")
+
+        h5file.close()
 
     def setUp(self):
         self.tmpdir = TempDir("vertest")
         self.testfilename = os.path.join(self.tmpdir.path, "vertest.nix")
-        if not self.mpi:
-            self.h5file = h5py.File(self.testfilename, mode="w")
-        else:
-            comm=MPI.COMM_WORLD
-            self.h5file = h5py.File(self.testfilename, mode="w", driver="mpio", comm= comm)
-        self.h5root = self.h5file["/"]
+
+        # if not self.mpi:
+        #     h5file = h5py.File(self.testfilename, mode="w")
+        # else:
+        #     comm=MPI.COMM_WORLD
+        #     h5file = h5py.File(self.testfilename, mode="w", driver="mpio", comm= comm)
+        # # h5root = h5file["/"]
+        # h5file.close()
 
     def tearDown(self):
-        self.h5file.close()
+        # h5file.close()
         self.tmpdir.cleanup()
 
     def test_read_write(self):
@@ -366,6 +375,3 @@ class TestFile_mpi(TestFile):
 @unittest.skipUnless(MPI_ENABLED, "h5py is not built with MPI support")
 class TestFileVer_mpi(TestFileVer):
     mpi = True
-
-if __name__ == '__main__':
-    unittest.main()
