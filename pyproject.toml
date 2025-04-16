@@ -45,6 +45,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/G-Node/nixpy"
+Documentation= "https://nixpy.readthedocs.io/en/latest/install.html"
 
 [project.optional-dependencies]
 test = [
