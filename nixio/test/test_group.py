@@ -193,3 +193,4 @@ class TestGroups(unittest.TestCase):
         self.assertRaises(RuntimeError, newgroup.tags.append, tag)
 
         del self.file.blocks[newblock.id]
+
