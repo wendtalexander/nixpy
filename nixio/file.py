@@ -8,6 +8,7 @@
 # LICENSE file in the root of the Project.
 import os
 import gc
+from IPython import embed
 import numpy as np
 from sys import maxsize
 from warnings import warn
@@ -82,6 +83,7 @@ def make_fapl(mpi4:bool):
         try:
             fapl.set_driver(h5py.h5fd.MPIO)
             fapl.set_fapl_mpio(mpi_comm, mpi_info)
+            
         except ValueError:
             raise Invalidh5py
     return fapl
@@ -124,11 +126,13 @@ class File:
                 "Cannot open non-existent file in ReadOnly mode!"
             )
 
+        self.mpi = mpi
         if not os.path.exists(path) or mode == FileMode.Overwrite:
             mode = FileMode.Overwrite
             h5mode = map_file_mode(mode)
             fid = h5py.h5f.create(path, flags=h5mode, fapl=make_fapl(mpi),
                                   fcpl=make_fcpl())
+        
             self._h5file = h5py.File(fid)
             self._root = H5Group(self._h5file, "/", create=True)
             self._create_header()
@@ -393,10 +397,32 @@ class File:
         """
         Closes an open file.
         """
-        gc.collect()  # should handle refs better instead of calling collect()
-        # Flush is probably unnecessary
-        self._h5file.flush()
-        self._h5file.close()
+        if  hasattr(self, '_h5file') and self._h5file:
+            # Explicitly close all open objects (groups, datasets, etc.)
+            # Use h5py's internal method to force-close lingering objects
+            try:
+                # Close non-file objects first (datasets, groups, etc.)
+                self._h5file.id._close_open_objects(h5py.h5f.OBJ_LOCAL | ~h5py.h5f.OBJ_FILE)
+                # Close file objects (if any)
+                self._h5file.id._close_open_objects(h5py.h5f.OBJ_LOCAL | h5py.h5f.OBJ_FILE)
+            except Exception as e:
+                raise e
+                # Log or handle errors during forced closure
+
+            # Flush and close the file
+            # self._h5file.flush()
+            self._h5file.close()
+
+            # Explicitly clear references to avoid lingering handles
+            # self._h5file = None
+
+        # Optional: Call garbage collector (but don't rely on it)
+        gc.collect()
+        # gc.collect()  # should handle refs better instead of calling collect()
+        #
+        # # Flush is probably unnecessary
+        # self._h5file.flush()
+        # self._h5file.close()
 
     # Block
     def create_block(self, name="", type_="", compression=Compression.Auto,
