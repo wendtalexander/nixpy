@@ -15,15 +15,18 @@ from warnings import warn
 
 import h5py
 import numpy as np
+from IPython import embed
 
 from . import util, validator
 from .block import Block
 from .compression import Compression
 from .container import Container, SectionContainer
+from .datatype import DataType
 from .exceptions import DuplicateName, InvalidFile
 from .hdf5.h5group import H5Group
 from .section import Section
 from .util import find as finders
+import nixio
 
 FILE_FORMAT = "nix"
 HDF_FF_VERSION = (1, 2, 1)
@@ -133,6 +136,7 @@ class File:
         # make container props but don't initialise
         self._blocks = None
         self._sections = None
+        self._layout_indices = {}
 
     @classmethod
     def open(cls, path, mode=FileMode.ReadWrite, compression=Compression.Auto,
@@ -489,6 +493,43 @@ class File:
         if self._sections is None:
             self._sections = SectionContainer("metadata", self, self, Section)
         return self._sections
+
+    def create_virtual_layout(self, virtual_shape, virtual_dtype)->h5py.VirtualLayout:
+        layout = h5py.VirtualLayout(virtual_shape, virtual_dtype)
+        self._layout_indices[id(layout)] = [0] *len(virtual_shape)
+        return layout
+
+    def append_to_virtual_layout(self, layout: h5py.VirtualLayout, dataarray, selection=None, axis=0):
+        layout_id = id(layout)
+        if layout_id not in self._layout_indices:
+            raise ValueError("Unknown layout")
+        # If selection is not provided, auto-increment along axis
+        if selection is None:
+            idx = self._layout_indices[layout_id][axis]
+            # Build selection: all slices except axis, which is idx
+            selection = [slice(None)] * len(layout.shape)
+            selection[axis] = idx
+            selection = tuple(selection)
+        else:
+            # Validate selection length
+            if len(selection) != len(layout.shape):
+                raise ValueError("Selection must match layout dimensions.")
+
+        # Check bounds for each dimension
+        for i, sel in enumerate(selection):
+            if isinstance(sel, int):
+                if not (0 <= sel < layout.shape[i]):
+                    raise IndexError(f"Index {sel} out of bounds for axis {i}")
+            elif isinstance(sel, slice):
+                # Optionally, check slice bounds here
+                pass
+
+        vsource = h5py.VirtualSource(dataarray)
+        layout[selection] = vsource
+
+        # If auto-incrementing, update index
+        if selection is None:
+            self._layout_indices[layout_id][axis] += 1
 
 
 # Copy File constructor docstring to File.open
