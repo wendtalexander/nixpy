@@ -499,37 +499,36 @@ class File:
         self._layout_indices[id(layout)] = [0] *len(virtual_shape)
         return layout
 
-    def append_to_virtual_layout(self, layout: h5py.VirtualLayout, dataarray, selection=None, axis=0):
+    def append_to_virtual_layout(self, layout: h5py.VirtualLayout, dataarray, axis=0)->None:
         layout_id = id(layout)
         if layout_id not in self._layout_indices:
             raise ValueError("Unknown layout")
         # If selection is not provided, auto-increment along axis
-        if selection is None:
-            idx = self._layout_indices[layout_id][axis]
-            # Build selection: all slices except axis, which is idx
-            selection = [slice(None)] * len(layout.shape)
-            selection[axis] = idx
-            selection = tuple(selection)
-        else:
-            # Validate selection length
-            if len(selection) != len(layout.shape):
-                raise ValueError("Selection must match layout dimensions.")
+        if axis > len(self._layout_indices[layout_id]):
+            raise IndexError(f"""Index {axis} is out of range for dimensions
+                            {len(self._layout_indices[layout_id][axis])}""")
+        idx = self._layout_indices[layout_id][axis]
+        # Build selection: all slices except axis, which is idx
+        selection = [slice(None)] * len(layout.shape)
+        selection[axis] = idx
+        selection = tuple(selection)
 
-        # Check bounds for each dimension
-        for i, sel in enumerate(selection):
-            if isinstance(sel, int):
-                if not (0 <= sel < layout.shape[i]):
-                    raise IndexError(f"Index {sel} out of bounds for axis {i}")
-            elif isinstance(sel, slice):
-                # Optionally, check slice bounds here
-                pass
+        dset_name = finders._find_h5py_data_set(self._h5file, dataarray.name)
 
-        vsource = h5py.VirtualSource(dataarray)
-        layout[selection] = vsource
+        if len(dset_name) < 1:
+            raise KeyError(f"{dataarray.name} can not be found in the nix file")
+        if len(dset_name)>1:
+            raise ValueError(f"{dataarray.name} is found multiple times")
+
+        vsource = h5py.VirtualSource(self._h5file[dset_name[0]])
+        try:
+            layout[selection] = vsource
+        except IndexError:
+            raise IndexError("Virtual layout is allready filled")
 
         # If auto-incrementing, update index
-        if selection is None:
-            self._layout_indices[layout_id][axis] += 1
+        self._layout_indices[layout_id][axis] += 1
+
 
 
 # Copy File constructor docstring to File.open
