@@ -8,6 +8,7 @@
 # LICENSE file in the root of the Project.
 
 import nixio
+import h5py
 
 
 class Cont:
@@ -76,3 +77,12 @@ def _find_sections(with_sections, filtr, limit):
             result.append(child.elem)
 
     return result
+
+def _find_h5py_data_set(h5_file:h5py.File, target_name):
+    targed_dset = []
+    def visitor(name,  obj):
+        if isinstance(obj, h5py.Dataset) and name.split('/')[-2] == target_name:
+            targed_dset.append(name)
+
+    h5_file.visititems(visitor)
+    return targed_dset
