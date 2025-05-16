@@ -9,16 +9,17 @@
 
 from sys import maxsize
 
-import numpy as np
 from inspect import isclass
 try:
     from collections.abc import OrderedDict
 except ImportError:
     from collections import OrderedDict
 
+import numpy as np
+import h5py
+
 from .util import find as finders
 from .compression import Compression
-
 from .entity import Entity
 from .exceptions import exceptions
 from .group import Group
@@ -28,6 +29,7 @@ from .multi_tag import MultiTag
 from .tag import Tag
 from .source import Source
 from . import util
+from .virtual_data_array import VirtualDataArray
 from .container import Container, SourceContainer
 from .section import Section
 
@@ -256,6 +258,19 @@ class Block(Entity):
             da.write_direct(data)
         da.unit = unit
         da.label = label
+        return da
+
+    def create_virtual_data_array(self,layout: h5py.VirtualLayout, name="",
+                                  array_type="",  label=None, unit=None):
+        if not isinstance(layout, h5py.VirtualLayout):
+            raise ValueError(f"layout is of type {type(layout)} and not of type h5py.VirtualLayout")
+        data_arrays = self._h5group.open_group("data_arrays")
+        if name in data_arrays:
+            raise exceptions.DuplicateName("create_data_array")
+        da = VirtualDataArray.create_new(self.file, self, data_arrays,layout,
+                                         name, layout.dtype,)
+        # da.unit = unit
+        # da.label = label
         return da
 
     def create_data_frame(self, name="", type_="", col_dict=None,
