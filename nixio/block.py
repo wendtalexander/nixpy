@@ -15,6 +15,7 @@ try:
 except ImportError:
     from collections import OrderedDict
 
+from IPython import embed
 import numpy as np
 import h5py
 
@@ -268,9 +269,9 @@ class Block(Entity):
         if name in data_arrays:
             raise exceptions.DuplicateName("create_data_array")
         da = VirtualDataArray.create_new(self.file, self, data_arrays,layout,
-                                         name, layout.dtype,)
-        # da.unit = unit
-        # da.label = label
+                                         name, array_type)
+        da.unit = unit
+        da.label = label
         return da
 
     def create_data_frame(self, name="", type_="", col_dict=None,
