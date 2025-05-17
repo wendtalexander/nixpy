@@ -10,7 +10,7 @@
 import gc
 import pathlib
 from sys import maxsize
-from typing import Union
+from typing import Type, Union
 from warnings import warn
 
 import h5py
@@ -494,7 +494,9 @@ class File:
             self._sections = SectionContainer("metadata", self, self, Section)
         return self._sections
 
-    def create_virtual_layout(self, virtual_shape, virtual_dtype)->h5py.VirtualLayout:
+    def create_virtual_layout(self, virtual_shape,
+                              virtual_dtype:np.dtype)->h5py.VirtualLayout:
+
         layout = h5py.VirtualLayout(virtual_shape, virtual_dtype)
         self._layout_indices[id(layout)] = [0] *len(virtual_shape)
         return layout
