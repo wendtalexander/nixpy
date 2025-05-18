@@ -89,7 +89,13 @@ Referenced by
    basic_idea
    install
    standardization
-   Use-cases <https://nixio.readthedocs.io/en/master/use_cases.html>
+
+.. toctree::
+   :maxdepth: 1
+   :caption: use-cases
+
+   nixio 🔗 <https://nixio.readthedocs.io/en/master/use_cases.html>
+   use-cases-nixpy
 
 .. toctree::
    :maxdepth: 1
