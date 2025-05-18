@@ -52,7 +52,8 @@ test = [
     "matplotlib"
 ]
 doc = [
-    "sphinx"
+    "sphinx",
+    "sphinx_rtd_theme"
 ]
 all = [
     "nixio[test]",
