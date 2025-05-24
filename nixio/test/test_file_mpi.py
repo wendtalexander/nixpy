@@ -15,153 +15,238 @@ import unittest
 import h5py
 import numpy as np
 import pytest
-import pytest_mpi
+
+MPI = pytest.importorskip("mpi4py.MPI")
 
 import nixio as nix
 import nixio.file as filepy
 from nixio.exceptions import DuplicateName, InvalidFile
 
-MPI_ENABLED = getattr(h5py.get_config(), "mpi", False)
-print(f"MPI status is {MPI_ENABLED}")
 
-from tempfile import mkdtemp
+@pytest.fixture
+def nix_file_factory(mpi_tmp_path, request):
+    def _factory(comm, info, mode):
+        nix_file_path = mpi_tmp_path / "testfile.nix"
+        return nix.File(nix_file_path, mode, mpi=True, mpi_comm=comm, mpi_info=info)
 
-#
-# class TestMPI(unittest.TestCase):
-#     def test_rank(self):
-#         from mpi4py import MPI
-#
-#         comm = MPI.COMM_WORLD
-#         rank = comm.Get_rank()
-#         size = comm.Get_size()
-#         # Example: Each rank checks its own rank number
-#         self.assertTrue(0 <= rank < size)
+    def cleanup():
+        for file in mpi_tmp_path.iterdir():
+            try:
+                file.unlink()
+            except Exception:
+                pass
 
+    request.addfinalizer(cleanup)
 
-def test_create_nix_file(mpi_tmp_path):
-    nix_file = mpi_tmp_path / "vertest.nix"
-    with nix.File(nix_file, nix.FileMode.Overwrite, mpi=True):
-        pass
-    assert nix_file.exists()
+    return _factory
 
 
-#
-# class TempDir:
-#     def __init__(self, prefix=None):
-#         self.path = mkdtemp(prefix=prefix)
-#
-#     def cleanup(self):
-#         if os.path.exists(self.path):
-#             shutil.rmtree(self.path)
-#
-#     def __del__(self):
-#         self.cleanup()
+@pytest.mark.mpi
+@pytest.mark.parametrize(
+    "comm,info",
+    [
+        (MPI.COMM_WORLD, MPI.Info.Create()),
+        # Add more (comm, info) pairs for this test
+    ],
+)
+def test_file_format(nix_file_factory, comm, info):
+    with nix_file_factory(comm, info, mode=nix.FileMode.Overwrite) as f:
+        assert f.format == "nix"
 
+
+@pytest.mark.mpi
+@pytest.mark.parametrize(
+    "comm,info",
+    [
+        (MPI.COMM_WORLD, MPI.Info.Create()),
+        (MPI.COMM_WORLD.Split(color=0, key=0), MPI.Info.Create()),
+        # You can set custom info hints as well:
+        # (MPI.COMM_WORLD, custom_info),
+    ],
+)
+def test_file_format_different_comm(nix_file_factory, comm, info):
+    # Optionally set info hints
+    info.Set("cb_buffer_size", "1048576")
+    with nix_file_factory(comm, info, mode=nix.FileMode.Overwrite) as f:
+        assert f.format == "nix"
+
+
+@pytest.mark.mpi
+def test_two_blocks_per_rank(nix_file_factory):
+    comm = MPI.COMM_WORLD
+    info = MPI.Info.Create()
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    with nix_file_factory(comm, info, mode=nix.FileMode.Overwrite) as f:
+        # Create two blocks for this rank
+        for r in range(size):
+            f.create_block(f"block_{r}_1", "test")
+            f.create_block(f"block_{r}_2", "test")
+        comm.Barrier()
+
+        # Optionally, check that the blocks exist
+        if rank == 0:
+            blocks = f.blocks
+            for r in range(size):
+                assert blocks[f"block_{r}_1"]
+                assert blocks[f"block_{r}_2"]
+
+            assert len(blocks) == 2 * size
+
+
+@pytest.mark.mpi
+def test_dataarray_parallel_write(nix_file_factory):
+    comm = MPI.COMM_WORLD
+    info = MPI.Info.Create()
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    # Create the file and DataArray (all ranks participate)
+    with nix_file_factory(comm, info, mode=nix.FileMode.Overwrite) as f:
+        # All ranks must call create_block and create_data_array with the same arguments!
+        block = f.create_block("block", "test")
+        data_shape = (size, 5)
+        data = np.zeros(data_shape, dtype=np.float64)
+        da = block.create_data_array(
+            "parallel_data", "test", shape=data_shape, dtype=np.float64
+        )
+        my_data = np.full((5,), fill_value=rank, dtype=np.float64)
+        da[rank, :] = my_data
+
+        comm.Barrier()
+
+        # Optionally, check the data (from rank 0)
+        if rank == 0:
+            arr = da[:]
+            for r in range(size):
+                assert np.all(arr[r, :] == r)
+
+
+def set_header(h5root, fformat=None, version=None, fileid=None):
+    if fformat is None:
+        fformat = filepy.FILE_FORMAT
+    if version is None:
+        version = filepy.HDF_FF_VERSION
+    if fileid is None:
+        fileid = nix.util.create_id()
+    h5root.attrs["format"] = fformat
+    h5root.attrs["version"] = version
+    h5root.attrs["id"] = fileid
+    h5root.attrs["created_at"] = 0
+    h5root.attrs["updated_at"] = 0
+    if "data" not in h5root:
+        h5root.create_group("data")
+        h5root.create_group("metadata")
+
+
+@pytest.mark.mpi
+def test_read_write(mpi_tmp_path):
+    comm = MPI.COMM_WORLD
+    info = MPI.Info.Create()
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    testfilename = mpi_tmp_path / "vertest.nix"
+    # Create the file and set the header
+    with h5py.File(
+        testfilename, mode="w", driver="mpio", comm=comm, info=info
+    ) as h5file:
+        h5root = h5file["/"]
+        set_header(h5root)
+    with nix.File.open(
+        testfilename, nix.FileMode.ReadWrite, mpi=True, mpi_comm=comm, mpi_info=info
+    ) as nix_file:
+        assert nix_file._h5file.attrs["format"] == filepy.FILE_FORMAT
+        assert tuple(nix_file._h5file.attrs["version"]) == filepy.HDF_FF_VERSION
+        assert "id" in nix_file._h5file.attrs
+        assert "data" in nix_file._h5file
+        assert "metadata" in nix_file._h5file
+
+
+# import shutil
+# import tempfile
+# import unittest
+# from pathlib import Path
 #
-# @pytest.mark.mpi
-# class TestFileVer(unittest.TestCase):
-#     from mpi4py import MPI
+# from mpi4py import MPI
 #
-#     backend = "h5py"
-#     filever = filepy.HDF_FF_VERSION
-#     fformat = filepy.FILE_FORMAT
-#     comm = MPI.COMM_WORLD
-#
-#     # def try_open(self, mode):
-#     #     with nix.File(self.testfilename, mode, mpi=self.mpi) as file:
-#     #         pass
-#     #
-#     # def set_header(self, fformat=None, version=None, fileid=None):
-#     #     h5file = h5py.File(self.testfilename, mode="w", driver="mpio", comm=self.comm)
-#     #     h5root = h5file["/"]
-#     #
-#     #     if fformat is None:
-#     #         fformat = self.fformat
-#     #     if version is None:
-#     #         version = self.filever
-#     #     if fileid is None:
-#     #         fileid = nix.util.create_id()
-#     #     h5root.attrs["format"] = fformat
-#     #     h5root.attrs["version"] = version
-#     #     h5root.attrs["id"] = fileid
-#     #     h5root.attrs["created_at"] = 0
-#     #     h5root.attrs["updated_at"] = 0
-#     #     if "data" not in h5root:
-#     #         h5root.create_group("data")
-#     #         h5root.create_group("metadata")
-#     #     h5file.close()
-# #
+# import nixio as nix  # or import nix if that's the correct import
+
+# class TestNixFileFormat(unittest.TestCase):
 #     def setUp(self):
-#         self.tmpdir = TempDir("vertest")
-#         self.testfilename = os.path.join(self.tmpdir.path, "vertest.nix")
+#         # Create a temporary directory for each test
+#         self.tmp_dir = tempfile.mkdtemp()
+#         self.mpi_tmp_path = Path(self.tmp_dir)
 #
 #     def tearDown(self):
-#         self.tmpdir.cleanup()
+#         # Cleanup: remove all files in the temp directory
+#         shutil.rmtree(self.tmp_dir)
+#
+#     def nix_file_factory(self, comm, info, mode):
+#         nix_file_path = self.mpi_tmp_path / "testfile.nix"
+#         return nix.File(nix_file_path, mode, mpi=True, mpi_comm=comm, mpi_info=info)
+#
+#     def test_file_format(self):
+#         comm_info_pairs = [
+#             (MPI.COMM_WORLD, MPI.Info.Create()),
+#             # Add more (comm, info) pairs as needed
+#         ]
+#         for comm, info in comm_info_pairs:
+#             with self.subTest(comm=comm, info=info):
+#                 with self.nix_file_factory(
+#                     comm, info, mode=nix.FileMode.Overwrite
+#                 ) as f:
+#                     self.assertEqual(f.format, "nix")
+
+#
+# class TestDataArrayParallelWrite(unittest.TestCase):
+#     def setUp(self):
+#         self.comm = MPI.COMM_WORLD
+#         self.rank = self.comm.Get_rank()
+#         self.size = self.comm.Get_size()
+#         # Only rank 0 sets the file path
+#         if self.rank == 0:
+#             self.file_path = "/tmp/test_parallel_dataarray.nix"
+#         else:
+#             self.file_path = None
+#         # Broadcast the file path to all ranks
+#         self.file_path = self.comm.bcast(self.file_path, root=0)
+#
+#     def tearDown(self):
+#         self.comm.Barrier()  # Ensure all ranks are done before cleanup
+#         if self.rank == 0 and os.path.exists(self.file_path):
+#             os.remove(self.file_path)
+#
+#     def test_dataarray_parallel_write(self):
+#         info = MPI.Info.Create()
+#         # All ranks participate in file creation and writing
+#         with nix.File(
+#             self.file_path,
+#             nix.FileMode.Overwrite,
+#             mpi=True,
+#             mpi_comm=self.comm,
+#             mpi_info=info,
+#         ) as f:
+#             block = f.create_block("block", "test")
+#             data_shape = (self.size, 5)
+#             data = np.zeros(data_shape, dtype=np.float64)
+#             da = block.create_data_array(
+#                 "parallel_data", "test", shape=data_shape, dtype=np.float64
+#             )
+#             my_data = np.full((5,), fill_value=self.rank, dtype=np.float64)
+#             da[self.rank, :] = my_data
+#
+#             self.comm.Barrier()
+#
+#             # Only rank 0 checks the data
+#             if self.rank == 0:
+#                 arr = da[:]
+#                 for r in range(self.size):
+#                     self.assertTrue(np.all(arr[r, :] == r))
+#
+#
 # #
-#     # def test_read_write(self):
-#     #     self.set_header()
-#     #     self.try_open(nix.FileMode.ReadWrite)
-#
-#     def test_read_only(self):
-#         ver_x, ver_y, ver_z = self.filever
-#         roversion = (ver_x, ver_y, ver_z + 2)
-#         self.set_header(version=roversion)
-#         self.try_open(nix.FileMode.ReadOnly)
-#         with self.assertRaises(RuntimeError):
-#             self.try_open(nix.FileMode.ReadWrite)
-#
-#     #
-#     # def test_no_open(self):
-#     #     ver_x, ver_y, ver_z = self.filever
-#     #     noversion = (ver_x, ver_y+3, ver_z+2)
-#     #     self.set_header(version=noversion)
-#     #     with self.assertRaises(RuntimeError):
-#     #         self.try_open(nix.FileMode.ReadWrite)
-#     #     with self.assertRaises(RuntimeError):
-#     #         self.try_open(nix.FileMode.ReadOnly)
-#     #     noversion = (ver_x, ver_y+1, ver_z)
-#     #     self.set_header(version=noversion)
-#     #     with self.assertRaises(RuntimeError):
-#     #         self.try_open(nix.FileMode.ReadWrite)
-#     #     with self.assertRaises(RuntimeError):
-#     #         self.try_open(nix.FileMode.ReadOnly)
-#     #     noversion = (ver_x+1, ver_y, ver_z)
-#     #     self.set_header(version=noversion)
-#     #     with self.assertRaises(RuntimeError):
-#     #         self.try_open(nix.FileMode.ReadWrite)
-#     #     with self.assertRaises(RuntimeError):
-#     #         self.try_open(nix.FileMode.ReadOnly)
-#     #
-#     # def test_bad_tuple(self):
-#     #     self.set_header(version=(-1, -1, -1))
-#     #     with self.assertRaises(RuntimeError):
-#     #         self.try_open(nix.FileMode.ReadOnly)
-#     #     self.set_header(version=(1, 2))
-#     #     with self.assertRaises(RuntimeError):
-#     #         self.try_open(nix.FileMode.ReadOnly)
-#     #
-#     # def test_bad_format(self):
-#     #     self.set_header(fformat="NOT_A_NIX_FILE")
-#     #     with self.assertRaises(InvalidFile):
-#     #         self.try_open(nix.FileMode.ReadOnly)
-#     #
-#     # def test_bad_id(self):
-#     #     self.set_header(fileid="")
-#     #     with self.assertRaises(RuntimeError):
-#     #         self.try_open(nix.FileMode.ReadOnly)
-#     #
-#     #     # empty file ID OK for versions older than 1.2.0
-#     #     self.set_header(version=(1, 1, 1), fileid="")
-#     #     self.try_open(nix.FileMode.ReadOnly)
-#     #
-#     #     self.set_header(version=(1, 1, 0), fileid="")
-#     #     self.try_open(nix.FileMode.ReadOnly)
-#     #
-#     #     self.set_header(version=(1, 0, 0), fileid="")
-#     #     self.try_open(nix.FileMode.ReadOnly)
-#
-#
+# #
 # if __name__ == "__main__":
-#     ts = TestFileVer()
-#     embed()
-#     exit()
+#     unittest.main()
