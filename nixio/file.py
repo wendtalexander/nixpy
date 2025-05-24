@@ -20,7 +20,7 @@ from . import util, validator
 from .block import Block
 from .compression import Compression
 from .container import Container, SectionContainer
-from .exceptions import DuplicateName, InvalidFile
+from .exceptions import DuplicateName, InvalidFile, Invalidh5py
 from .hdf5.h5group import H5Group
 from .section import Section
 from .util import find as finders
@@ -67,24 +67,25 @@ def map_file_mode(mode):
     else:
         raise ValueError("Invalid file mode specified.")
 
-def make_fapl(mpi4:bool):
+def make_fapl(mpi:bool, comm=None, info=None):
     """
     File Access Property List
     """
     fapl = h5py.h5p.create(h5py.h5p.FILE_ACCESS)
-    if mpi4:
-        try:
-            from mpi4py import MPI
-        except ModuleNotFoundError:
-            raise ModuleNotFoundError
-        mpi_comm = MPI.COMM_WORLD
-        mpi_info = MPI.Info.Create()
-        try:
-            fapl.set_driver(h5py.h5fd.MPIO)
-            fapl.set_fapl_mpio(mpi_comm, mpi_info)
-            
-        except ValueError:
-            raise Invalidh5py
+    if mpi:
+            try:
+                from mpi4py import MPI
+            except ModuleNotFoundError:
+                raise ModuleNotFoundError("mpi4py is required for MPI support.")
+            if comm is None:
+                comm = MPI.COMM_WORLD
+            if info is None:
+                info = MPI.Info.Create()
+            try:
+                fapl.set_driver(h5py.h5fd.MPIO)
+                fapl.set_fapl_mpio(comm, info)
+            except ValueError:
+                raise Invalidh5py
     return fapl
 
 
@@ -99,9 +100,8 @@ def make_fcpl():
 class File:
 
     def __init__(self, path: Union[str, pathlib.Path], mode=FileMode.ReadWrite,
-                 compression=Compression.Auto,
-                 auto_update_timestamps=True,
-                 mpi:bool=False):
+                 compression=Compression.Auto, auto_update_timestamps=True,
+                 mpi:bool=False, mpi_comm=None, mpi_info=None):
         """
         Open a NIX file, or create it if it does not exist.
 
@@ -117,6 +117,7 @@ class File:
         """
         path = pathlib.Path(path)
 
+        self.mpi = mpi
         if not path.exists() and mode == FileMode.ReadOnly:
             raise RuntimeError(
                 "Cannot open non-existent file in ReadOnly mode!"
@@ -125,15 +126,16 @@ class File:
         if not path.exists or mode == FileMode.Overwrite:
             mode = FileMode.Overwrite
             h5mode = map_file_mode(mode)
-            fid = h5py.h5f.create(str(path).encode("utf-8"), flags=h5mode, fapl=make_fapl(),
-                                  fcpl=make_fcpl())
+            fid = h5py.h5f.create(str(path).encode("utf-8"), flags=h5mode,
+                                  fapl=make_fapl(self.mpi, comm=mpi_comm,
+                                                 info=mpi_info), fcpl=make_fcpl())
         
             self._h5file = h5py.File(fid)
             self._root = H5Group(self._h5file, "/", create=True)
             self._create_header()
         else:
             h5mode = map_file_mode(mode)
-            fid = h5py.h5f.open(str(path).encode("utf-8"), flags=h5mode, fapl=make_fapl())
+            fid = h5py.h5f.open(str(path).encode("utf-8"), flags=h5mode, fapl=make_fapl(self.mpi, comm=mpi_comm, info=mpi_info))
             self._h5file = h5py.File(fid)
             self._root = H5Group(self._h5file, "/")
 
@@ -156,7 +158,8 @@ class File:
 
     @classmethod
     def open(cls, path, mode=FileMode.ReadWrite, compression=Compression.Auto,
-             backend=None, auto_update_timestamps=True, mpi:bool=False):
+             backend=None, auto_update_timestamps=True, mpi:bool=False,
+             mpi_comm=None, mpi_info=None):
         if backend is not None:
             warn("Backend selection is deprecated. Ignoring value.")
         return cls(path, mode, compression, auto_update_timestamps, mpi)
