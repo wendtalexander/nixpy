@@ -6,25 +6,24 @@
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted under the terms of the BSD License. See
 # LICENSE file in the root of the Project.
-import os
+
 import gc
-from IPython import embed
-import numpy as np
+import pathlib
 from sys import maxsize
+from typing import Union
 from warnings import warn
 
 import h5py
+import numpy as np
 
-from .hdf5.h5group import H5Group
+from . import util, validator
 from .block import Block
-from .section import Section
-from .container import Container, SectionContainer
-from . import util
-from .exceptions import InvalidFile, DuplicateName, Invalidh5py
-from .util import find as finders
-from . import validator
 from .compression import Compression
-
+from .container import Container, SectionContainer
+from .exceptions import DuplicateName, InvalidFile
+from .hdf5.h5group import H5Group
+from .section import Section
+from .util import find as finders
 
 FILE_FORMAT = "nix"
 HDF_FF_VERSION = (1, 2, 1)
@@ -99,7 +98,7 @@ def make_fcpl():
 
 class File:
 
-    def __init__(self, path, mode=FileMode.ReadWrite,
+    def __init__(self, path: Union[str, pathlib.Path], mode=FileMode.ReadWrite,
                  compression=Compression.Auto,
                  auto_update_timestamps=True,
                  mpi:bool=False):
@@ -116,21 +115,17 @@ class File:
 
         :return: nixio.File object
         """
-        try:
-            path = path.encode("utf-8")
-        except (UnicodeError, LookupError):
-            pass
+        path = pathlib.Path(path)
 
-        if not os.path.exists(path) and mode == FileMode.ReadOnly:
+        if not path.exists() and mode == FileMode.ReadOnly:
             raise RuntimeError(
                 "Cannot open non-existent file in ReadOnly mode!"
             )
 
-        self.mpi = mpi
-        if not os.path.exists(path) or mode == FileMode.Overwrite:
+        if not path.exists or mode == FileMode.Overwrite:
             mode = FileMode.Overwrite
             h5mode = map_file_mode(mode)
-            fid = h5py.h5f.create(path, flags=h5mode, fapl=make_fapl(mpi),
+            fid = h5py.h5f.create(str(path).encode("utf-8"), flags=h5mode, fapl=make_fapl(),
                                   fcpl=make_fcpl())
         
             self._h5file = h5py.File(fid)
@@ -138,7 +133,7 @@ class File:
             self._create_header()
         else:
             h5mode = map_file_mode(mode)
-            fid = h5py.h5f.open(path, flags=h5mode, fapl=make_fapl(mpi))
+            fid = h5py.h5f.open(str(path).encode("utf-8"), flags=h5mode, fapl=make_fapl())
             self._h5file = h5py.File(fid)
             self._root = H5Group(self._h5file, "/")
 
@@ -165,6 +160,7 @@ class File:
         if backend is not None:
             warn("Backend selection is deprecated. Ignoring value.")
         return cls(path, mode, compression, auto_update_timestamps, mpi)
+
 
     def _create_header(self):
         self._set_format()
