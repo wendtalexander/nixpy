@@ -73,7 +73,7 @@ jobs:
           conda --version
       - name: Install Python dependencies
         run: |
-          python setup.py install
+          pip install ".[dev]"
           pip install pytest scipy pillow matplotlib setuptools h5py
       - name: Run tests
         run: |
