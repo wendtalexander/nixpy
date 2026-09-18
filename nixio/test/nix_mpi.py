@@ -1,16 +1,16 @@
 import time
-from mpi4py import MPI
-import nixio
-from nixio.exceptions import DuplicateName
-from IPython import embed
+
 import numpy as np
+from mpi4py import MPI
+
+import nixio
 
 
 def main(dset, assigned_chunks, rank):
     for chunk_idx in assigned_chunks:
         start = chunk_idx * chunk_rows
         end = min(start + chunk_rows, total_rows)
-        dset[start:end, :] = np.random.randn(end - start, 32)
+        dset[start:end, :] = np.zeros((end - start, 32)) + rank
     return dset
 
 
@@ -21,22 +21,18 @@ if __name__ == "__main__":
     total_rows = 42_000_000
     num_cols = 32
 
-    with nixio.File("large_dataset.nix", mpi=True) as file:
+    with nixio.File.open(
+        "large_dataset.nix", mpi=True, mode=nixio.FileMode.Overwrite
+    ) as file:
         start = time.time()
-        try:
-            block = file.create_block("data", "mult")
-        except DuplicateName:
-            block = file.blocks[0]
+        block = file.create_block("data", "mult")
 
-        try:
-            dset = block.create_data_array(
-                "data_array",
-                "int16",
-                dtype=nixio.DataType.Int16,
-                shape=(total_rows, num_cols),
-            )
-        except DuplicateName:
-            dset = block.data_arrays["data_array"]
+        dset = block.create_data_array(
+            "data_array",
+            "int16",
+            dtype=nixio.DataType.Int16,
+            shape=(total_rows, num_cols),
+        )
 
         end = time.time()
         duration = end - start
@@ -73,5 +69,5 @@ if __name__ == "__main__":
         print(f"process {rank} finished in {duration} s")
         # file.flush()
         comm.Barrier()
-    #     # MPI.Finalize()
+        # MPI.Finalize()
     # file.close()
