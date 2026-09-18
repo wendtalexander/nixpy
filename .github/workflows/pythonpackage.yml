@@ -30,7 +30,7 @@ jobs:
     - name: Run install
       run: |
         pip install setuptools
-        pip install .
+        pip install ".[dev]"
     - name: Lint with Pylint
       run: |
         pip install pylint
@@ -90,7 +90,7 @@ jobs:
           python-version: "3.10"
       - name: Install dependencies
         run: |
-          python setup.py install
+          pip install ".[dev]"
           pip install pytest coveralls scipy pillow matplotlib h5py
       - name: Create coverage
         run: |
@@ -111,7 +111,7 @@ jobs:
           python-version: "3.10"
       - name: Install dependencies
         run: |
-          python setup.py install
+          pip install ".[dev]"
           pip install pytest pytest-cov scipy pillow matplotlib
       - name: Create coverage
         run: |
