@@ -4,6 +4,7 @@ on:
   # Run one build a month at 01:00
   # schedule:
   # - cron:  '0 1 1 * *'
+  workflow_dispatch:
   push:
     branches:
       - master
@@ -11,7 +12,6 @@ on:
   pull_request:
     branches:
       - master
-
 jobs:
   build:
     runs-on: ${{ matrix.os }}
